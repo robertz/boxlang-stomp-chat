@@ -182,12 +182,17 @@ Things worth knowing if you extend this:
   to yet. The client now puts a `receipt` on the private subscribe and waits for
   the broker's RECEIPT before subscribing to any DM. The presence replay in
   `onSubscribe()` is a workaround for the same underlying thing.
-- **A multi-byte character in a message body drops the frame.** SocketBox's parser
-  compares `content-length` (bytes) against something that counts characters, so a
-  body containing an em dash fails with "Unexpected end of message while reading
-  body (found 27 bytes, but content-length header specified 28 bytes)" and the
-  message silently never arrives. Affects every destination, not just DMs. Not
-  fixed here — it's in the vendored module.
+- **A multi-byte character in a message body drops the frame.** SocketBox's
+  `MessageParser.readBody()` loops `content-length` times over `charAt()`, but
+  content-length counts bytes and `charAt()` walks UTF-16 chars — so a body holding
+  an em dash, an accent, CJK or an emoji overruns the frame and is discarded with
+  "Unexpected end of message while reading body (found 27 bytes, but content-length
+  header specified 28 bytes)". Inbound only; `serialize()` sets the outgoing header
+  in real bytes, so it can look like a client bug. **Not a charset setting** — the
+  string is already correct UTF-8, which is why you get a length mismatch and not
+  mojibake. Patched locally in `modules/socketbox/models/STOMP/MessageParser.cfc`
+  by slicing the byte window and decoding it back; `modules/` is gitignored, so
+  `box install` will undo that and it needs to go upstream.
 - **A model cached in the application scope keeps its old class.** Editing
   `ChatStore.bx` while the server is running gets you `Method 'x' not found` from
   the instance already sitting in `application.chatStore`, even though the file on
