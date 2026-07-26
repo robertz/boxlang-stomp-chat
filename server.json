@@ -1,0 +1,24 @@
+{
+    "name":"stomp-chat",
+    "app":{
+        "cfengine":"boxlang@be"
+    },
+    "jvm":{
+        "javaVersion":"openjdk21_jdk"
+    },
+    "rewrites":{
+        "enable":true
+    },
+    "web":{
+        "websocket":{
+            "enable":true,
+            "listener":"WebSocket.bx"
+        },
+        "bindings":{
+            "HTTP":{
+                "listen":"8080"
+            }
+        }
+    },
+    "openbrowser":false
+}

@@ -1,0 +1,28 @@
+<bx:script>
+	// Read-only initial state so a freshly loaded page doesn't have to wait on STOMP.
+	if ( !application.keyExists( "chatStore" ) ) {
+		lock name="stomp-chat-store-init" type="exclusive" timeout="20" {
+			if ( !application.keyExists( "chatStore" ) ) {
+				application.chatStore = new models.ChatStore();
+			}
+		}
+	}
+	chatStore = application.chatStore;
+	action    = url.action ?: "";
+
+	switch ( action ) {
+		case "channels":
+			payload = { "channels" : chatStore.getChannels() };
+			break;
+		case "history":
+			slug    = chatStore.slugify( url.channel ?: "" );
+			payload = { "channel" : slug, "messages" : chatStore.getHistory( slug ) };
+			break;
+		default:
+			payload = { "error" : "Unknown action '#action#'" };
+	}
+</bx:script>
+<bx:header name="Cache-Control" value="no-store">
+<bx:content type="application/json" reset="true">
+<bx:output>#jsonSerialize( payload )#</bx:output>
+</bx:content>

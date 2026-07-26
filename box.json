@@ -1,0 +1,12 @@
+{
+    "name":"stomp-chat",
+    "slug":"stomp-chat",
+    "version":"1.0.0",
+    "shortDescription":"Slack-like chat built on BoxLang + SocketBox STOMP",
+    "dependencies":{
+        "socketbox":"^2.1.0"
+    },
+    "installPaths":{
+        "socketbox":"modules/socketbox/"
+    }
+}

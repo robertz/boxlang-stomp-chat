@@ -1,0 +1,7 @@
+class {
+
+    this.name = "stomp-chat";
+    this.applicationTimeout = createTimeSpan( 7, 0, 0, 0 );
+    this.sessionManagement = false;
+
+}

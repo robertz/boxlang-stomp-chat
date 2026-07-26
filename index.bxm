@@ -1,0 +1,36 @@
+<bx:script>
+	assets = new models.Assets( getDirectoryFromPath( getCurrentTemplatePath() ) );
+</bx:script>
+<!--- The document is the only thing that knows the current fingerprint, so it
+      must never itself be served from cache. --->
+<bx:header name="Cache-Control" value="no-cache, must-revalidate">
+<bx:output><!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+	<meta name="theme-color" content="##1e1b2e">
+	<title>Stomp Chat</title>
+	<link rel="stylesheet" href="#assets.versioned( '/assets/app.css' )#">
+	<script>
+		/* Applies an explicit theme choice before first paint. Without this the
+		   page renders in the OS theme and then flips once useTheme.js loads.
+		   The key is duplicated from assets/useTheme.js on purpose -- nothing
+		   loaded through the import map is available this early. */
+		try {
+			var storedTheme = localStorage.getItem( 'stomp.theme' );
+			if ( storedTheme === 'light' || storedTheme === 'dark' ) {
+				document.documentElement.dataset.theme = storedTheme;
+			}
+		} catch ( e ) {}
+	</script>
+	<script type="importmap">
+	#jsonSerialize( assets.getImportMap() )#
+	</script>
+</head>
+<body>
+	<div id="app"></div>
+	<script type="module" src="#assets.versioned( '/assets/app.js' )#"></script>
+</body>
+</html>
+</bx:output>

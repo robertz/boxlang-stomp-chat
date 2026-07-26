@@ -1,0 +1,65 @@
+/**
+ * Cache-busting for the static frontend.
+ *
+ * Every local asset URL carries ?v=<fingerprint>, where the fingerprint covers
+ * the size and mtime of every file under assets/.  It therefore changes on any
+ * edit, and so on every server start that followed one.
+ *
+ * The JS files need an import map rather than a query string per <script> tag,
+ * because a module's own relative imports ("./useChat.js") are static text we
+ * cannot rewrite.  An import map key is matched against the resolved URL, so
+ * mapping /assets/useChat.js to /assets/useChat.js?v=... busts nested imports
+ * too, and every importer still resolves to the same single module instance.
+ */
+class {
+
+	variables.VENDOR = {
+		"vue"            : "https://unpkg.com/vue@3/dist/vue.esm-browser.prod.js",
+		"@stomp/stompjs" : "https://ga.jspm.io/npm:@stomp/stompjs@7.0.0/esm6/index.js"
+	};
+
+	function init( required string webRoot ) {
+		variables.webRoot = webRoot;
+		variables.scan    = scanAssets();
+		return this;
+	}
+
+	string function versioned( required string path ) {
+		return path & "?v=" & variables.scan.version;
+	}
+
+	struct function getImportMap() {
+		var imports = structCopy( variables.VENDOR );
+		for ( var modulePath in variables.scan.modules ) {
+			imports[ modulePath ] = versioned( modulePath );
+		}
+		return { "imports" : imports };
+	}
+
+	private struct function scanAssets() {
+		var assetRoot   = variables.webRoot & "assets";
+		var files       = directoryList( path = assetRoot, recurse = true, listInfo = "query" );
+		var fingerprint = createObject( "java", "java.lang.StringBuilder" ).init();
+		var modules     = [];
+		var backslash   = char( 92 );
+
+		for ( var file in files ) {
+			if ( file.type != "File" ) {
+				continue;
+			}
+			var fullPath = file.directory & "/" & file.name;
+			var webPath  = "/assets" & replace( right( fullPath, len( fullPath ) - len( assetRoot ) ), backslash, "/", "all" );
+
+			fingerprint.append( webPath & "|" & file.size & "|" & file.dateLastModified & ";" );
+			if ( listLast( file.name, "." ) == "js" ) {
+				modules.append( webPath );
+			}
+		}
+
+		return {
+			"version" : left( hash( fingerprint.toString() ), 12 ),
+			"modules" : modules
+		};
+	}
+
+}

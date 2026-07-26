@@ -1,0 +1,895 @@
+/*
+ * Themes are one token list, not two.  light-dark() picks a side from the used
+ * `color-scheme`, so `prefers-color-scheme` drives the default and a manual
+ * override only has to change `color-scheme` on the root -- no duplicated block
+ * to keep in sync.  Needs Chrome 123 / Safari 17.5 / Firefox 120.
+ */
+:root {
+	color-scheme: light dark;
+
+	/* The sidebar is dark in both themes, but in dark mode it sits *below* the
+	   message pane rather than above it, so the two still read as separate. */
+	--sidebar-bg: light-dark(#1e1b2e, #131120);
+	--sidebar-bg-hover: light-dark(#2f2a45, #241f38);
+	--sidebar-fg: light-dark(#c9c4dc, #b4aecb);
+	/* Also nudged for contrast: these were 4.29:1 / 4.44:1 on the sidebar, and
+	   11px bold uppercase doesn't qualify for the large-text exemption */
+	--sidebar-fg-dim: light-dark(#8f8aad, #847ea4);
+
+	/* One value for both themes: this is almost always a background behind white
+	   text, and white on it needs 4.5:1. The old #4c6ef5 was 4.33:1 and a lighter
+	   dark-mode variant made it worse, so it's darkened rather than split. */
+	--accent: #4a67e8;
+	/* Brighter, for focus rings and borders where nothing sits on top */
+	--accent-line: light-dark(#4c6ef5, #8fa3ff);
+
+	--surface: light-dark(#ffffff, #1b1928);
+	--surface-alt: light-dark(#f7f7fa, #242133);
+	--border: light-dark(#e3e2ea, #2f2b41);
+
+	--text: light-dark(#1f2033, #e7e4f0);
+	/* Nudged down from #71718a, which was 4.43:1 on --surface-alt */
+	--text-dim: light-dark(#6b6b85, #9a94b0);
+	--danger: light-dark(#d64545, #f08383);
+	--online: light-dark(#3fbf7f, #4fd493);
+
+	--input-bg: light-dark(#ffffff, #2b2740);
+	--disabled-bg: light-dark(#b9bfd6, #383350);
+	--avatar-bg: light-dark(#1e1b2e, #3b3557);
+	--scrim: light-dark(rgba(15, 13, 26, 0.45), rgba(0, 0, 0, 0.6));
+	--shadow-panel: light-dark(0 24px 60px rgba(0, 0, 0, 0.35), 0 24px 60px rgba(0, 0, 0, 0.65));
+	--shadow-drawer-strength: light-dark(0.18, 0.55);
+
+	--banner-bg: light-dark(#fdf2f2, #341d22);
+	--banner-fg: light-dark(#8a1f1f, #f3aeae);
+	--banner-action-bg: light-dark(#ffffff, #46262d);
+	--banner-action-bg-hover: light-dark(#fbeaea, #57303a);
+	--banner-action-border: light-dark(#e0b4b4, #6d3c46);
+}
+
+/* The only thing a manual override has to do */
+:root[data-theme='light'] {
+	color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+	color-scheme: dark;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+html,
+body {
+	height: 100%;
+	margin: 0;
+}
+
+body {
+	font: 15px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+	color: var(--text);
+	background: var(--surface-alt);
+	-webkit-text-size-adjust: 100%;
+	-webkit-tap-highlight-color: transparent;
+}
+
+#app {
+	height: 100%;
+}
+
+/* ------------------------------------------------------------ name gate */
+
+.gate {
+	display: grid;
+	place-items: center;
+	height: 100%;
+	background: linear-gradient(150deg, var(--sidebar-bg), light-dark(#3b3357, #2a2440));
+}
+
+.gate__card {
+	width: min(400px, 90vw);
+	padding: 32px;
+	background: var(--surface);
+	border-radius: 14px;
+	box-shadow: var(--shadow-panel);
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+}
+
+.gate__title {
+	margin: 0;
+	font-size: 24px;
+}
+
+.gate__blurb {
+	margin: 0;
+	color: var(--text-dim);
+	font-size: 14px;
+}
+
+.gate__input {
+	padding: 11px 13px;
+	font-size: 15px;
+	color: var(--text);
+	background: var(--input-bg);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+}
+
+.gate__input:focus {
+	outline: 2px solid var(--accent-line);
+	outline-offset: -1px;
+	border-color: transparent;
+}
+
+.gate__error {
+	margin: 0;
+	color: var(--danger);
+	font-size: 13px;
+}
+
+.gate__button {
+	padding: 11px;
+	font-size: 15px;
+	font-weight: 600;
+	color: #fff;
+	background: var(--accent);
+	border: 0;
+	border-radius: 8px;
+	cursor: pointer;
+}
+
+.gate__button:disabled {
+	background: var(--disabled-bg);
+	cursor: default;
+}
+
+/* ------------------------------------------------------------ layout */
+
+.shell {
+	display: grid;
+	grid-template-columns: 240px minmax(0, 1fr) 180px;
+	height: 100%;
+	/* dvh so mobile browser chrome can't push the composer below the fold */
+	height: 100dvh;
+	overflow: hidden;
+}
+
+/* ------------------------------------------------------------ sidebar */
+
+.sidebar {
+	display: flex;
+	flex-direction: column;
+	gap: 18px;
+	padding: 16px 12px;
+	background: var(--sidebar-bg);
+	color: var(--sidebar-fg);
+	min-height: 0;
+	overflow-y: auto;
+}
+
+.sidebar__header {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 0 6px;
+}
+
+.sidebar__brand {
+	font-size: 16px;
+	font-weight: 700;
+	color: #fff;
+}
+
+.sidebar__status {
+	font-size: 11px;
+	color: var(--sidebar-fg-dim);
+}
+
+.sidebar__status.is-live {
+	color: var(--online);
+}
+
+.sidebar__section {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.sidebar__heading {
+	margin: 0 0 2px 6px;
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--sidebar-fg-dim);
+}
+
+.sidebar__toggle {
+	margin-left: 2px;
+	padding: 4px 4px;
+	font: inherit;
+	font-size: 12px;
+	text-align: left;
+	color: var(--sidebar-fg-dim);
+	background: none;
+	border: 0;
+	cursor: pointer;
+}
+
+.channel-list {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+}
+
+.channel {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	width: 100%;
+	padding: 6px 8px;
+	font: inherit;
+	font-size: 14px;
+	text-align: left;
+	color: var(--sidebar-fg);
+	background: none;
+	border: 0;
+	border-radius: 6px;
+	cursor: pointer;
+}
+
+.channel:hover {
+	background: var(--sidebar-bg-hover);
+}
+
+.channel.is-active {
+	color: #fff;
+	background: var(--accent);
+}
+
+.channel--muted {
+	color: var(--sidebar-fg-dim);
+}
+
+.channel__name {
+	flex: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.channel__badge {
+	padding: 1px 7px;
+	font-size: 11px;
+	font-weight: 700;
+	color: #fff;
+	background: var(--danger);
+	border-radius: 10px;
+}
+
+.channel__leave,
+.channel__join {
+	font-size: 11px;
+	color: var(--sidebar-fg-dim);
+	opacity: 0;
+}
+
+.channel__leave {
+	font-size: 15px;
+	line-height: 1;
+}
+
+.channel:hover .channel__leave,
+.channel:hover .channel__join {
+	opacity: 1;
+}
+
+.create {
+	display: flex;
+	gap: 6px;
+}
+
+.create__input {
+	flex: 1;
+	min-width: 0;
+	padding: 6px 8px;
+	font: inherit;
+	font-size: 13px;
+	color: var(--sidebar-fg);
+	background: rgba(255, 255, 255, 0.07);
+	border: 1px solid transparent;
+	border-radius: 6px;
+}
+
+.create__input::placeholder {
+	color: var(--sidebar-fg-dim);
+}
+
+.create__input:focus {
+	outline: none;
+	border-color: var(--accent-line);
+}
+
+.create__button {
+	width: 30px;
+	font-size: 17px;
+	line-height: 1;
+	color: var(--sidebar-fg);
+	background: rgba(255, 255, 255, 0.07);
+	border: 0;
+	border-radius: 6px;
+	cursor: pointer;
+}
+
+.create__button:disabled {
+	opacity: 0.4;
+	cursor: default;
+}
+
+.create__error {
+	margin: 0 0 0 2px;
+	font-size: 12px;
+	color: #ff9d9d;
+	cursor: pointer;
+}
+
+.sidebar__footer {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	margin-top: auto;
+	padding: 10px 6px 0;
+	border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.sidebar__me {
+	flex: 1;
+	overflow: hidden;
+	font-size: 13px;
+	font-weight: 600;
+	color: #fff;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.sidebar__link {
+	font: inherit;
+	font-size: 12px;
+	color: var(--sidebar-fg-dim);
+	background: none;
+	border: 0;
+	text-decoration: underline;
+	cursor: pointer;
+}
+
+.sidebar__theme {
+	padding: 2px 8px;
+	font: inherit;
+	font-size: 11px;
+	color: var(--sidebar-fg-dim);
+	background: rgba(255, 255, 255, 0.07);
+	border: 0;
+	border-radius: 10px;
+	cursor: pointer;
+}
+
+.sidebar__theme:hover {
+	color: var(--sidebar-fg);
+	background: rgba(255, 255, 255, 0.14);
+}
+
+/* ------------------------------------------------------------ main */
+
+.main {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	/* Grid items default to min-height:auto, which lets tall content stretch the
+	   column and shove the composer off-screen instead of scrolling. */
+	min-height: 0;
+	overflow: hidden;
+	background: var(--surface);
+}
+
+.main__header {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex: 0 0 auto;
+	padding: 14px 20px;
+	border-bottom: 1px solid var(--border);
+}
+
+.main__title {
+	margin: 0;
+	font-size: 17px;
+}
+
+.main__reconnecting {
+	font-size: 12px;
+	color: var(--danger);
+}
+
+.main__icon {
+	display: none;
+	position: relative;
+	place-items: center;
+	flex: 0 0 auto;
+	width: 38px;
+	height: 38px;
+	padding: 0;
+	font: inherit;
+	color: var(--text-dim);
+	background: none;
+	border: 1px solid var(--border);
+	border-radius: 9px;
+	cursor: pointer;
+}
+
+.main__icon--members {
+	margin-left: auto;
+}
+
+.main__burger,
+.main__burger::before,
+.main__burger::after {
+	display: block;
+	width: 17px;
+	height: 2px;
+	background: var(--text);
+	border-radius: 2px;
+}
+
+.main__burger::before,
+.main__burger::after {
+	content: '';
+	position: absolute;
+}
+
+.main__burger::before {
+	transform: translateY(-6px);
+}
+
+.main__burger::after {
+	transform: translateY(6px);
+}
+
+.main__icon-text {
+	font-size: 13px;
+	font-weight: 700;
+	color: var(--text);
+}
+
+.main__icon-badge {
+	position: absolute;
+	top: -5px;
+	right: -5px;
+	min-width: 18px;
+	padding: 0 5px;
+	font-size: 11px;
+	font-weight: 700;
+	line-height: 18px;
+	color: #fff;
+	background: var(--danger);
+	border-radius: 9px;
+}
+
+.banner {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 10px;
+	flex: 0 0 auto;
+	padding: 10px 20px;
+	font-size: 13px;
+	border-bottom: 1px solid var(--border);
+}
+
+.banner--offline {
+	background: var(--banner-bg);
+	color: var(--banner-fg);
+}
+
+.banner__text {
+	flex: 1;
+	min-width: 200px;
+}
+
+.banner__action {
+	padding: 4px 10px;
+	font: inherit;
+	font-weight: 600;
+	color: var(--banner-fg);
+	background: var(--banner-action-bg);
+	border: 1px solid var(--banner-action-border);
+	border-radius: 4px;
+	cursor: pointer;
+}
+
+.banner__action:hover {
+	background: var(--banner-action-bg-hover);
+}
+
+.messages {
+	flex: 1 1 auto;
+	/* Without this the flex item refuses to shrink below its content height */
+	min-height: 0;
+	padding: 16px 20px;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+}
+
+.messages__empty {
+	color: var(--text-dim);
+	font-size: 14px;
+}
+
+.message {
+	display: flex;
+	gap: 10px;
+	padding: 3px 0;
+}
+
+.message--grouped {
+	padding-top: 0;
+}
+
+.message--system {
+	justify-content: center;
+	padding: 8px 0;
+}
+
+.message__system-text {
+	padding: 3px 10px;
+	font-size: 12px;
+	color: var(--text-dim);
+	background: var(--surface-alt);
+	border-radius: 10px;
+}
+
+.message__avatar {
+	display: grid;
+	place-items: center;
+	flex: 0 0 32px;
+	height: 32px;
+	font-size: 13px;
+	font-weight: 700;
+	color: #fff;
+	background: var(--avatar-bg);
+	border-radius: 7px;
+}
+
+.message__avatar--blank {
+	background: none;
+}
+
+.message__body {
+	min-width: 0;
+}
+
+.message__meta {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+}
+
+.message__from {
+	font-weight: 700;
+	font-size: 14px;
+}
+
+.message__time {
+	font-size: 11px;
+	color: var(--text-dim);
+}
+
+.message__text {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+/* ------------------------------------------------------------ composer */
+
+.composer {
+	flex: 0 0 auto;
+	padding: 12px 20px 8px;
+	border-top: 1px solid var(--border);
+	background: var(--surface);
+	padding-bottom: max( 8px, env( safe-area-inset-bottom ) );
+}
+
+.composer__form {
+	display: flex;
+	gap: 8px;
+	align-items: flex-end;
+}
+
+.composer__input {
+	flex: 1;
+	min-height: 42px;
+	max-height: 160px;
+	padding: 10px 12px;
+	font: inherit;
+	color: var(--text);
+	background: var(--input-bg);
+	resize: vertical;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+}
+
+.composer__input:focus {
+	outline: 2px solid var(--accent-line);
+	outline-offset: -1px;
+	border-color: transparent;
+}
+
+.composer__send {
+	padding: 11px 18px;
+	font: inherit;
+	font-weight: 600;
+	color: #fff;
+	background: var(--accent);
+	border: 0;
+	border-radius: 8px;
+	cursor: pointer;
+}
+
+.composer__send:disabled {
+	background: var(--disabled-bg);
+	cursor: default;
+}
+
+.composer__typing {
+	height: 18px;
+	margin: 4px 0 0;
+	font-size: 12px;
+	font-style: italic;
+	color: var(--text-dim);
+}
+
+/* ------------------------------------------------------------ presence */
+
+.presence {
+	padding: 16px 14px;
+	background: var(--surface-alt);
+	border-left: 1px solid var(--border);
+	min-height: 0;
+	overflow-y: auto;
+}
+
+.presence__top {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+}
+
+.presence__heading {
+	margin: 0 0 10px;
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--text-dim);
+}
+
+.presence__list {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	display: flex;
+	flex-direction: column;
+	gap: 7px;
+}
+
+.presence__empty {
+	margin: 0;
+	font-size: 12px;
+	color: var(--text-dim);
+}
+
+.presence__item {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	font-size: 14px;
+}
+
+.presence__dot {
+	width: 8px;
+	height: 8px;
+	background: var(--online);
+	border-radius: 50%;
+}
+
+.presence__name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.presence__name.is-me {
+	font-weight: 700;
+}
+
+/* ------------------------------------------------------ responsive / touch */
+/* Kept last in the file: media queries add no specificity, so these overrides
+   must come after the base rules they undo. */
+
+/* Off-canvas panels: hidden and inert until a drawer is open */
+
+.scrim {
+	position: fixed;
+	inset: 0;
+	z-index: 20;
+	background: var(--scrim);
+	opacity: 0;
+	visibility: hidden;
+	pointer-events: none;
+	transition: opacity 0.22s ease, visibility 0.22s ease;
+}
+
+.shell.is-nav-open .scrim,
+.shell.is-members-open .scrim {
+	opacity: 1;
+	visibility: visible;
+	pointer-events: auto;
+}
+
+.panel__close {
+	display: none;
+	width: 34px;
+	height: 34px;
+	margin: -6px -4px -6px 0;
+	font: inherit;
+	font-size: 24px;
+	line-height: 1;
+	color: var(--sidebar-fg-dim);
+	background: none;
+	border: 0;
+	cursor: pointer;
+}
+
+@media (min-width: 1025px) {
+	/* A drawer left open before a resize must not leave a scrim over the desktop layout */
+	.scrim {
+		display: none;
+	}
+}
+
+@media (max-width: 1024px) {
+	.shell {
+		grid-template-columns: 240px minmax(0, 1fr);
+	}
+
+	.presence {
+		position: fixed;
+		top: 0;
+		right: 0;
+		bottom: 0;
+		z-index: 30;
+		width: min(280px, 80vw);
+		padding-right: max(14px, env(safe-area-inset-right));
+		padding-bottom: max(16px, env(safe-area-inset-bottom));
+		transform: translateX(100%);
+		transition: transform 0.22s ease;
+		box-shadow: -10px 0 34px rgb(0 0 0 / var(--shadow-drawer-strength));
+	}
+
+	.shell.is-members-open .presence {
+		transform: none;
+	}
+
+	.main__icon--members {
+		display: grid;
+	}
+
+	.presence .panel__close {
+		display: block;
+		color: var(--text-dim);
+	}
+}
+
+@media (max-width: 760px) {
+	.shell {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.sidebar {
+		position: fixed;
+		top: 0;
+		left: 0;
+		bottom: 0;
+		z-index: 30;
+		width: min(272px, 80vw);
+		padding-left: max(12px, env(safe-area-inset-left));
+		padding-bottom: max(16px, env(safe-area-inset-bottom));
+		transform: translateX(-100%);
+		transition: transform 0.22s ease;
+		box-shadow: 10px 0 34px rgb(0 0 0 / var(--shadow-drawer-strength));
+	}
+
+	.shell.is-nav-open .sidebar {
+		transform: none;
+	}
+
+	.main__icon--nav {
+		display: grid;
+	}
+
+	.sidebar .panel__close {
+		display: block;
+	}
+
+	.main__header {
+		gap: 8px;
+		padding: 10px 12px;
+	}
+
+	.main__title {
+		flex: 1;
+		min-width: 0;
+		font-size: 16px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.messages {
+		padding: 12px 14px;
+	}
+
+	.composer {
+		padding: 10px 12px 8px;
+		padding-bottom: max(8px, env(safe-area-inset-bottom));
+	}
+
+	.banner {
+		padding: 10px 12px;
+	}
+
+	.gate__card {
+		padding: 24px 20px;
+	}
+}
+
+/* iOS Safari zooms the whole page when focusing an input under 16px */
+@media (pointer: coarse) {
+	.composer__input,
+	.gate__input,
+	.create__input {
+		font-size: 16px;
+	}
+
+	.composer__input {
+		resize: none;
+	}
+
+	.composer__send,
+	.gate__button {
+		min-height: 44px;
+	}
+}
+
+/* Touch devices never fire :hover, so anything hover-revealed is unreachable */
+@media (hover: none) {
+	.channel__leave,
+	.channel__join {
+		opacity: 1;
+	}
+
+	.channel {
+		padding: 9px 8px;
+	}
+
+	.presence__item {
+		padding: 3px 0;
+	}
+}

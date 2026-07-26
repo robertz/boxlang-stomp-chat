@@ -1,0 +1,368 @@
+/**
+ * STOMP broker for the chat app.
+ *
+ * Destination map (all on the default `direct` exchange):
+ *
+ *   chat.<slug>        client SEND + SUBSCRIBE   chat and system messages for one channel
+ *   typing.<slug>      client SEND + SUBSCRIBE   transient typing pings, never stored
+ *   channels           client SUBSCRIBE          channel directory broadcasts
+ *   channels.create    client SEND               request creation of a new channel
+ *   presence.<slug>    client SUBSCRIBE          who is currently in one channel
+ *   private.<session>  client SUBSCRIBE          targeted replies to one connection
+ *
+ * Channel membership is derived from the live `chat.<slug>` subscriptions rather
+ * than tracked alongside them, so it cannot drift out of sync with reality.
+ */
+class extends="modules.socketbox.models.WebSocketSTOMP" {
+
+	variables.MAX_MESSAGE_LENGTH = 4000;
+	variables.MAX_USERNAME_LENGTH = 32;
+
+	function configure() {
+		return {
+			"debugMode"   : false,
+			"heartBeatMS" : 10000,
+			"subscriptions" : {
+				// Closures capture the component's variables scope, so broker
+				// methods are callable directly.  Never use the ARGUMENTS prefix here.
+				"channels.create" : ( chatMessage ) => {
+					onChannelCreateRequest( chatMessage );
+				}
+			}
+		};
+	}
+
+	/* ------------------------------------------------------- authn / authz */
+
+	/**
+	 * Usernames must be non-blank, sane, and not already connected.  We throw
+	 * rather than return false so the client gets a specific reason it can act on.
+	 */
+	boolean function authenticate(
+		required string login,
+		required string passcode,
+		string host,
+		required channel,
+		required Struct connectionMetadata
+	) {
+		var username = login.trim();
+
+		if ( !username.len() ) {
+			throw( type = "STOMP-Authentication-failure", message = "Please choose a username." );
+		}
+		if ( username.len() > variables.MAX_USERNAME_LENGTH ) {
+			throw( type = "STOMP-Authentication-failure", message = "Username must be #variables.MAX_USERNAME_LENGTH# characters or fewer." );
+		}
+		if ( !reFind( "^[A-Za-z0-9_. -]+$", username ) ) {
+			throw( type = "STOMP-Authentication-failure", message = "Username may only contain letters, numbers, spaces, and . _ -" );
+		}
+		if ( isUsernameTaken( username ) ) {
+			throw( type = "STOMP-Authentication-failure", message = "Username '#username#' is already taken." );
+		}
+
+		connectionMetadata[ "username" ] = username;
+		return true;
+	}
+
+	/**
+	 * Enforce the destination map above.  Anything not explicitly restricted is open.
+	 */
+	boolean function authorize(
+		required string login,
+		required string exchange,
+		required string destination,
+		required string access,
+		required channel,
+		required Struct connectionMetadata
+	) {
+		if ( access == "read" ) {
+			// Server-owned inbox: nobody listens in on it
+			if ( destination == "channels.create" ) {
+				return false;
+			}
+			// A connection may only read its own private destination
+			if ( isPrefixed( destination, "private." ) ) {
+				return destination == privateDestination( channel );
+			}
+			return true;
+		}
+
+		// access == "write" -- these are broadcast-only, published by the server
+		if ( destination == "channels" || isPrefixed( destination, "presence." ) || isPrefixed( destination, "private." ) ) {
+			return false;
+		}
+		return true;
+	}
+
+	/* ------------------------------------------------------- lifecycle */
+
+	function onSubscribe( required chatMessage, required channel ) {
+		var destination = chatMessage.getHeader( "destination", "" );
+		var login       = getConnectionDetails( channel ).login ?: "";
+
+		super.onSubscribe( chatMessage, channel );
+
+		if ( isChatDestination( destination ) && login.len() ) {
+			announceSystemMessage( destination, "#login# joined the channel" );
+			broadcastChannelPresence( channelSlug( destination ) );
+		}
+
+		// A client subscribes to chat.<slug> and presence.<slug> separately, so the
+		// broadcast above can land before this subscription exists.  Replay it.
+		if ( isPrefixed( destination, "presence." ) ) {
+			broadcastChannelPresence( channelSlug( destination ) );
+		}
+	}
+
+	function onUnsubscribe( required chatMessage, required channel ) {
+		// The UNSUBSCRIBE frame carries only an id, so resolve the destination
+		// from the subscription registry before super removes it.
+		var destination = resolveSubscriptionDestination( channel, chatMessage.getHeader( "id", "" ) );
+		var login       = getConnectionDetails( channel ).login ?: "";
+
+		super.onUnsubscribe( chatMessage, channel );
+
+		if ( isChatDestination( destination ) && login.len() ) {
+			announceSystemMessage( destination, "#login# left the channel" );
+			// super has already dropped the subscription, so the derived member
+			// list correctly excludes the leaver.
+			broadcastChannelPresence( channelSlug( destination ) );
+		}
+	}
+
+	/**
+	 * Stamp the sender server-side so `from` can never be spoofed by a client.
+	 */
+	function onSend( required chatMessage, required channel ) {
+		var destination = chatMessage.getHeader( "destination", "" );
+		var login       = getConnectionDetails( channel ).login ?: "";
+
+		// No connection record means we can't stamp an author. Passing the body
+		// through unchanged would let a client publish a forged `from`, so refuse.
+		if ( !login.len() && ( isChatDestination( destination ) || isPrefixed( destination, "typing." ) ) ) {
+			return;
+		}
+
+		if ( isChatDestination( destination ) && login.len() ) {
+			var text = readText( chatMessage );
+			if ( !text.len() ) {
+				return;
+			}
+			var enriched = {
+				"id"     : createUUID(),
+				"type"   : "chat",
+				"from"   : login,
+				"text"   : text,
+				"sentAt" : dateTimeFormat( now(), "iso" )
+			};
+			chatMessage.setBody( enriched );
+			getChatStore().recordMessage( channelSlug( destination ), enriched );
+		} else if ( isPrefixed( destination, "typing." ) && login.len() ) {
+			chatMessage.setBody( { "type" : "typing", "from" : login } );
+		}
+
+		super.onSend( chatMessage, channel );
+	}
+
+	function onSTOMPDisconnect( required chatMessage, required channel ) {
+		var snapshot = captureSession( channel );
+		super.onSTOMPDisconnect( chatMessage, channel );
+		announceDeparture( snapshot );
+	}
+
+	function onClose( required channel ) {
+		// A clean DISCONNECT already cleared the connection record, so
+		// captureSession comes back empty here and we announce only once.
+		var snapshot = captureSession( channel );
+		super.onClose( channel );
+		announceDeparture( snapshot );
+	}
+
+	/* ------------------------------------------------------- channel creation */
+
+	/**
+	 * Server-side listener for `channels.create`.  Broadcasts the new directory on
+	 * success; reports failure only to the requesting connection.
+	 */
+	private function onChannelCreateRequest( required chatMessage ) {
+		var channel = chatMessage.getChannel();
+		if ( isNull( channel ) ) {
+			return;
+		}
+		var login = getConnectionDetails( channel ).login ?: "";
+		if ( !login.len() ) {
+			return;
+		}
+
+		var body = chatMessage.getBody();
+		var requestedName = isStruct( body ) ? ( body.name ?: "" ) : toString( body );
+
+		try {
+			var created = getChatStore().createChannel( requestedName, login );
+			send( "channels", { "channels" : getChatStore().getChannels() } );
+			send( privateDestination( channel ), { "type" : "channelCreated", "channel" : created } );
+		} catch ( "ChatStore.InvalidChannel" e ) {
+			send( privateDestination( channel ), { "type" : "error", "context" : "channelCreate", "text" : e.message } );
+		}
+	}
+
+	/* ------------------------------------------------------- helpers */
+
+	private function getChatStore() {
+		if ( !application.keyExists( "chatStore" ) ) {
+			lock name="stomp-chat-store-init" type="exclusive" timeout="20" {
+				if ( !application.keyExists( "chatStore" ) ) {
+					application.chatStore = new models.ChatStore();
+				}
+			}
+		}
+		return application.chatStore;
+	}
+
+	private function broadcastChannelPresence( required string slug ) {
+		send( "presence." & slug, { "users" : getChannelMembers( slug ) } );
+	}
+
+	/**
+	 * Who is in a channel, derived from the live chat.<slug> subscriptions.  A
+	 * login with two tabs open still appears once.
+	 */
+	private array function getChannelMembers( required string slug ) {
+		var subs        = getSubscriptions()[ "chat." & slug ] ?: {};
+		var connections = getSTOMPConnections();
+		var seen        = {};
+
+		for ( var subKey in structKeyArray( subs ) ) {
+			var subscription = subs[ subKey ] ?: {};
+			// Server-side ("internal") subscriptions have no originating connection
+			if ( ( subscription.type ?: "" ) != "channel" ) {
+				continue;
+			}
+			var login = connections[ subscription.channelID ].login ?: "";
+			if ( login.len() ) {
+				seen[ login ] = true;
+			}
+		}
+		return structKeyArray( seen ).sort( "textnocase" );
+	}
+
+	private function announceSystemMessage( required string destination, required string text ) {
+		var systemMessage = {
+			"id"     : createUUID(),
+			"type"   : "system",
+			"from"   : "",
+			"text"   : text,
+			"sentAt" : dateTimeFormat( now(), "iso" )
+		};
+		getChatStore().recordMessage( channelSlug( destination ), systemMessage );
+		send( destination, systemMessage );
+	}
+
+	/**
+	 * Grab everything we need about a connection before super tears it down.
+	 */
+	private struct function captureSession( required channel ) {
+		var details = getConnectionDetails( channel );
+		if ( details.isEmpty() ) {
+			return { "login" : "", "destinations" : [] };
+		}
+		return {
+			"login"        : details.login ?: "",
+			"destinations" : getChatDestinationsForChannel( channel )
+		};
+	}
+
+	private function announceDeparture( required struct snapshot ) {
+		if ( !snapshot.login.len() ) {
+			return;
+		}
+		for ( var destination in snapshot.destinations ) {
+			announceSystemMessage( destination, "#snapshot.login# left the channel" );
+			broadcastChannelPresence( channelSlug( destination ) );
+		}
+	}
+
+	private array function getChatDestinationsForChannel( required channel ) {
+		var channelID   = channel.hashCode();
+		var subs        = getSubscriptions();
+		var destinations = [];
+
+		for ( var destination in structKeyArray( subs ) ) {
+			if ( !isChatDestination( destination ) ) {
+				continue;
+			}
+			for ( var subKey in structKeyArray( subs[ destination ] ) ) {
+				var subscription = subs[ destination ][ subKey ] ?: {};
+				// Server-side ("internal") subscriptions have no channel
+				if ( ( subscription.type ?: "" ) != "channel" ) {
+					continue;
+				}
+				if ( subscription.channelID == channelID ) {
+					destinations.append( destination );
+					break;
+				}
+			}
+		}
+		return destinations;
+	}
+
+	private string function resolveSubscriptionDestination( required channel, required string subscriptionID ) {
+		if ( !subscriptionID.len() ) {
+			return "";
+		}
+		var subKey = channel.hashCode() & ":" & subscriptionID;
+		var subs   = getSubscriptions();
+		for ( var destination in structKeyArray( subs ) ) {
+			if ( structKeyExists( subs[ destination ], subKey ) ) {
+				return destination;
+			}
+		}
+		return "";
+	}
+
+	private boolean function isUsernameTaken( required string username ) {
+		var target      = username.lcase();
+		var connections = getSTOMPConnections();
+		for ( var key in structKeyArray( connections ) ) {
+			var connection = connections[ key ] ?: {};
+			if ( ( connection.login ?: "" ).lcase() != target ) {
+				continue;
+			}
+			if ( isNull( connection.channel ) || connection.channel.isOpen() ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Pull the message text out of a client SEND body, which may be a JSON
+	 * struct or a bare string.
+	 */
+	private string function readText( required chatMessage ) {
+		try {
+			var body = chatMessage.getBody();
+		} catch ( any e ) {
+			return "";
+		}
+		var text = isStruct( body ) ? ( body.text ?: "" ) : toString( body );
+		return left( text.trim(), variables.MAX_MESSAGE_LENGTH );
+	}
+
+	private string function privateDestination( required channel ) {
+		return "private." & channel.hashCode();
+	}
+
+	private boolean function isChatDestination( required string destination ) {
+		return isPrefixed( destination, "chat." );
+	}
+
+	private boolean function isPrefixed( required string destination, required string prefix ) {
+		return left( destination, prefix.len() ) == prefix && destination.len() > prefix.len();
+	}
+
+	private string function channelSlug( required string destination ) {
+		return listRest( destination, "." );
+	}
+
+}

@@ -1,0 +1,101 @@
+/**
+ * In-memory backing store for the chat app.  A single instance lives in the
+ * application scope and is shared by the WebSocket listener and HTTP requests.
+ */
+class {
+
+	variables.HISTORY_LIMIT = 100;
+	variables.RESERVED_SLUGS = "channels,presence,typing,chat,system";
+
+	function init() {
+		variables.channels = [
+			{
+				"slug"      : "general",
+				"name"      : "General",
+				"createdBy" : "system",
+				"createdAt" : isoNow()
+			}
+		];
+		variables.history = { "general" : [] };
+		return this;
+	}
+
+	/* ---------------------------------------------------------------- channels */
+
+	array function getChannels() {
+		return variables.channels;
+	}
+
+	boolean function channelExists( required string slug ) {
+		return variables.channels.some( ( c ) => c.slug == slug );
+	}
+
+	/**
+	 * Turn a display name into a destination-safe slug.
+	 */
+	string function slugify( required string name ) {
+		return name.trim()
+			.lcase()
+			.reReplace( "[^a-z0-9]+", "-", "all" )
+			.reReplace( "^-+|-+$", "", "all" );
+	}
+
+	/**
+	 * Create a channel.  Throws ChatStore.InvalidChannel if the name is unusable.
+	 */
+	struct function createChannel( required string name, required string createdBy ) {
+		var displayName = name.trim();
+		var slug        = slugify( displayName );
+
+		if ( !slug.len() ) {
+			throw( type = "ChatStore.InvalidChannel", message = "Channel name must contain at least one letter or number." );
+		}
+		if ( slug.len() > 40 ) {
+			throw( type = "ChatStore.InvalidChannel", message = "Channel name is too long (40 characters max)." );
+		}
+		if ( listFindNoCase( variables.RESERVED_SLUGS, slug ) ) {
+			throw( type = "ChatStore.InvalidChannel", message = "'#slug#' is a reserved name." );
+		}
+
+		lock name="ChatStore-channels" type="exclusive" timeout="10" {
+			if ( channelExists( slug ) ) {
+				throw( type = "ChatStore.InvalidChannel", message = "A channel named '#slug#' already exists." );
+			}
+			var channel = {
+				"slug"      : slug,
+				"name"      : displayName,
+				"createdBy" : createdBy,
+				"createdAt" : isoNow()
+			};
+			variables.channels.append( channel );
+			variables.history[ slug ] = [];
+			return channel;
+		}
+	}
+
+	/* ---------------------------------------------------------------- history */
+
+	array function getHistory( required string slug ) {
+		return variables.history[ slug ] ?: [];
+	}
+
+	function recordMessage( required string slug, required struct chatMessage ) {
+		lock name="ChatStore-history-#slug#" type="exclusive" timeout="10" {
+			if ( !variables.history.keyExists( slug ) ) {
+				variables.history[ slug ] = [];
+			}
+			var entries = variables.history[ slug ];
+			entries.append( chatMessage );
+			while ( entries.len() > variables.HISTORY_LIMIT ) {
+				entries.deleteAt( 1 );
+			}
+		}
+	}
+
+	/* ---------------------------------------------------------------- util */
+
+	private string function isoNow() {
+		return dateTimeFormat( now(), "iso" );
+	}
+
+}
