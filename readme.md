@@ -21,6 +21,7 @@ logging in the console, plus `window.__chat` (reactive state) and
 - Create channels and join/leave them; `General` is the default and can't be left
 - Message history (last 100 per channel, in memory — cleared on server restart)
 - Per-channel presence list, showing who is in the channel you're viewing
+- Direct messages — click anyone in the member list to start one
 - Join/leave system messages
 - Typing indicators
 - Per-channel unread badges
@@ -47,6 +48,33 @@ no-cache`, since it's the only thing that knows the current fingerprint.
 
 The scan runs per page load, so editing a file busts it immediately; no restart
 needed.
+
+### Direct messages
+
+A conversation between two people is just a channel with a reserved slug:
+`dm-<hexA>--<hexB>`, the two lowercased usernames hex-encoded and sorted. Both
+ends compute it independently, so no lookup is needed, and history, typing
+indicators, unread counts and presence all come along for free.
+
+Hex rather than the plain names because a username may contain spaces and dots —
+any lossier flattening could map two different people onto the same conversation,
+which would leak messages between them. `WebSocket.bx` and `assets/useChat.js`
+each carry the same encoder; they have to agree.
+
+Since the slug is derivable from two public usernames, the only thing keeping a
+conversation private is the guard at the top of `authorize()`, which rejects any
+`chat.`, `typing.` or `presence.` destination whose slug is a DM the connection
+isn't part of. For the same reason DM history is *not* served by `api.bxm` — that
+endpoint has no identity behind it — and arrives over the socket instead, pushed
+to `private.<session>` when a participant subscribes.
+
+A DM has nowhere to appear in the recipient's sidebar until they subscribe to it,
+so `onSend` also notifies every live connection of both participants. It re-sends
+on every message; the client only treats it as unread for a conversation it wasn't
+already in, which is what stops a message being counted twice.
+
+Closing a conversation is local only. The history survives on the server, so the
+next message reopens it where you left off.
 
 ### Theming
 
@@ -94,6 +122,9 @@ be created at runtime with no configuration.
 | `channels.create` | yes | no | request creation of a new channel |
 | `presence.<slug>` | no | yes | who is currently in one channel |
 | `private.<session>` | no | yes | targeted replies to one connection |
+
+Direct messages reuse the `chat.`, `typing.` and `presence.` rows above with a
+`dm-` slug rather than adding destinations of their own.
 
 `authorize()` in `WebSocket.bx` enforces that table. A connection may only read
 its own `private.` destination, and `channels`/`presence.*` are broadcast-only so
@@ -143,6 +174,25 @@ Things worth knowing if you extend this:
   comes back empty for a frame that races CONNECT, which would leave the client's
   raw body (and any `from` it invented) un-stamped. `onSend()` drops chat and
   typing frames that have no login rather than forwarding them.
+- **Frames from one socket are not handled in order.** The broker dispatches them
+  across worker threads, so a reply the server pushes in response to frame N can
+  be sent before frame N-1's subscription is registered. This ate DM history on
+  every reconnect: `private.<session>` and the DM's `chat.` subscribe went out in
+  the same burst, and the backlog was sent into a destination nobody was listening
+  to yet. The client now puts a `receipt` on the private subscribe and waits for
+  the broker's RECEIPT before subscribing to any DM. The presence replay in
+  `onSubscribe()` is a workaround for the same underlying thing.
+- **A multi-byte character in a message body drops the frame.** SocketBox's parser
+  compares `content-length` (bytes) against something that counts characters, so a
+  body containing an em dash fails with "Unexpected end of message while reading
+  body (found 27 bytes, but content-length header specified 28 bytes)" and the
+  message silently never arrives. Affects every destination, not just DMs. Not
+  fixed here — it's in the vendored module.
+- **A model cached in the application scope keeps its old class.** Editing
+  `ChatStore.bx` while the server is running gets you `Method 'x' not found` from
+  the instance already sitting in `application.chatStore`, even though the file on
+  disk is correct. Restart after changing a cached model; only the unversioned
+  frontend assets pick up edits live.
 - **Media queries add no specificity.** The responsive block lives at the bottom
   of `app.css` on purpose — put a `@media` override before the base rule it
   undoes and the base rule wins, which is how the mobile header buttons stayed

@@ -1,14 +1,17 @@
 import { createApp, computed } from 'vue';
 import {
 	state,
-	channelName,
+	displayTitle,
 	connect,
 	loadChannels,
 	reconnectNow,
 	changeUsername,
 	closePanels,
 	totalUnread,
-	usersFor
+	usersFor,
+	isDMSlug,
+	dmPartner,
+	isOnline
 } from './useChat.js';
 import { applyTheme } from './useTheme.js';
 import NameGate from './components/NameGate.js';
@@ -30,17 +33,24 @@ const App = {
 			connect( state.username );
 		}
 
-		const activeName = computed( () => channelName( state.activeSlug ) );
+		const activeTitle = computed( () => displayTitle( state.activeSlug ) );
 		const showGate = computed( () => !state.username || state.gateOpen );
 		const otherUnread = computed( () => totalUnread() - ( state.unread[ state.activeSlug ] || 0 ) );
 		const memberCount = computed( () => usersFor( state.activeSlug ).length );
+		// A two-person conversation has no useful member list, so the panel and its
+		// drawer button go away and the partner's status moves into the header,
+		// where it's visible at every width.
+		const isDM = computed( () => isDMSlug( state.activeSlug ) );
+		const partnerOnline = computed( () => isDM.value && isOnline( dmPartner( state.activeSlug ) ) );
 
 		return {
 			state,
-			activeName,
+			activeTitle,
 			showGate,
 			otherUnread,
 			memberCount,
+			isDM,
+			partnerOnline,
 			reconnectNow,
 			changeUsername,
 			closePanels
@@ -48,7 +58,11 @@ const App = {
 	},
 	template: `
 		<NameGate v-if="showGate" />
-		<div v-else class="shell" :class="{ 'is-nav-open': state.navOpen, 'is-members-open': state.membersOpen }">
+		<div
+			v-else
+			class="shell"
+			:class="{ 'is-nav-open': state.navOpen, 'is-members-open': state.membersOpen, 'shell--dm': isDM }"
+		>
 			<div class="scrim" @click="closePanels"></div>
 			<ChannelSidebar />
 			<main class="main">
@@ -57,10 +71,18 @@ const App = {
 						<span class="main__burger"></span>
 						<span v-if="otherUnread" class="main__icon-badge">{{ otherUnread }}</span>
 					</button>
-					<h1 class="main__title">#{{ activeName }}</h1>
+					<h1 class="main__title">{{ activeTitle }}</h1>
+					<span v-if="isDM" class="main__dm-status" :class="{ 'is-online': partnerOnline }">
+						{{ partnerOnline ? 'online' : 'offline' }}
+					</span>
 					<span v-if="!state.connected && !state.offlineReason" class="main__reconnecting">reconnecting…</span>
 					<span v-else-if="state.offlineReason" class="main__reconnecting">offline</span>
-					<button class="main__icon main__icon--members" aria-label="Members" @click="state.membersOpen = true">
+					<button
+						v-if="!isDM"
+						class="main__icon main__icon--members"
+						aria-label="Members"
+						@click="state.membersOpen = true"
+					>
 						<span class="main__icon-text">{{ memberCount }}</span>
 					</button>
 				</header>
@@ -72,7 +94,7 @@ const App = {
 				<MessageList />
 				<Composer />
 			</main>
-			<PresenceList />
+			<PresenceList v-if="!isDM" />
 		</div>
 	`
 };

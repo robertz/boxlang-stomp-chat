@@ -12,11 +12,20 @@
  *
  * Channel membership is derived from the live `chat.<slug>` subscriptions rather
  * than tracked alongside them, so it cannot drift out of sync with reality.
+ *
+ * Direct messages reuse all of the above rather than adding a parallel set of
+ * destinations: a conversation between two people is just a channel whose slug is
+ * `dm-<hexA>--<hexB>`, the two lowercased usernames hex-encoded and sorted.  That
+ * gives history, typing, unread counts and presence for free.  Hex rather than the
+ * plain names because usernames may contain spaces and dots, and any lossy
+ * flattening of those would let two different users collide onto one conversation.
  */
 class extends="modules.socketbox.models.WebSocketSTOMP" {
 
 	variables.MAX_MESSAGE_LENGTH = 4000;
 	variables.MAX_USERNAME_LENGTH = 32;
+	variables.DM_PREFIX = "dm-";
+	variables.DM_SEPARATOR = "--";
 
 	function configure() {
 		return {
@@ -75,6 +84,14 @@ class extends="modules.socketbox.models.WebSocketSTOMP" {
 		required channel,
 		required Struct connectionMetadata
 	) {
+		// A DM slug is derivable from two usernames, and usernames are public, so
+		// this is the only thing stopping a third party from reading — or writing
+		// into — someone else's conversation.  It covers chat, typing and presence
+		// in one place; everything below then applies as normal.
+		if ( isDMDestination( destination ) && !isDMParticipant( login, destination ) ) {
+			return false;
+		}
+
 		if ( access == "read" ) {
 			// Server-owned inbox: nobody listens in on it
 			if ( destination == "channels.create" ) {
@@ -103,8 +120,14 @@ class extends="modules.socketbox.models.WebSocketSTOMP" {
 		super.onSubscribe( chatMessage, channel );
 
 		if ( isChatDestination( destination ) && login.len() ) {
-			announceSystemMessage( destination, "#login# joined the channel" );
-			broadcastChannelPresence( channelSlug( destination ) );
+			if ( isDMDestination( destination ) ) {
+				// "X joined" in a two-person conversation is noise, and a reconnect
+				// would repeat it. Replay the backlog instead.
+				sendDMHistory( channel, destination );
+			} else {
+				announceSystemMessage( destination, "#login# joined the channel" );
+				broadcastChannelPresence( channelSlug( destination ) );
+			}
 		}
 
 		// A client subscribes to chat.<slug> and presence.<slug> separately, so the
@@ -122,7 +145,7 @@ class extends="modules.socketbox.models.WebSocketSTOMP" {
 
 		super.onUnsubscribe( chatMessage, channel );
 
-		if ( isChatDestination( destination ) && login.len() ) {
+		if ( isChatDestination( destination ) && !isDMDestination( destination ) && login.len() ) {
 			announceSystemMessage( destination, "#login# left the channel" );
 			// super has already dropped the subscription, so the derived member
 			// list correctly excludes the leaver.
@@ -162,6 +185,10 @@ class extends="modules.socketbox.models.WebSocketSTOMP" {
 		}
 
 		super.onSend( chatMessage, channel );
+
+		if ( isDMDestination( destination ) && isChatDestination( destination ) && login.len() ) {
+			notifyDMParticipants( destination, login );
+		}
 	}
 
 	function onSTOMPDisconnect( required chatMessage, required channel ) {
@@ -204,6 +231,85 @@ class extends="modules.socketbox.models.WebSocketSTOMP" {
 		} catch ( "ChatStore.InvalidChannel" e ) {
 			send( privateDestination( channel ), { "type" : "error", "context" : "channelCreate", "text" : e.message } );
 		}
+	}
+
+	/* ------------------------------------------------------- direct messages */
+
+	/**
+	 * A DM has nowhere to show up in the recipient's sidebar until they subscribe
+	 * to it, so point every live connection of both participants at the
+	 * conversation.  Handling it on the client is idempotent, which is what makes
+	 * re-sending this on every message harmless.
+	 */
+	private function notifyDMParticipants( required string destination, required string sender ) {
+		var slug         = channelSlug( destination );
+		var participants = dmParticipants( slug );
+		var connections  = getSTOMPConnections();
+
+		for ( var key in structKeyArray( connections ) ) {
+			var connection = connections[ key ] ?: {};
+			if ( isNull( connection.channel ) ) {
+				continue;
+			}
+			if ( !arrayFindNoCase( participants, connection.login ?: "" ) ) {
+				continue;
+			}
+			send( privateDestination( connection.channel ), {
+				"type" : "dmOpened",
+				"slug" : slug,
+				"from" : sender
+			} );
+		}
+	}
+
+	/**
+	 * DM backlog cannot go through api.bxm: that endpoint is plain HTTP with no
+	 * STOMP identity behind it, and a DM slug is computable from two public
+	 * usernames.  authorize() has already established that this connection is a
+	 * participant, so replay it over the socket instead.
+	 */
+	private function sendDMHistory( required channel, required string destination ) {
+		var slug = channelSlug( destination );
+		send( privateDestination( channel ), {
+			"type"     : "dmHistory",
+			"slug"     : slug,
+			"messages" : getChatStore().getHistory( slug )
+		} );
+	}
+
+	/**
+	 * The two logins a DM slug encodes, lowercased.  Empty for anything that isn't
+	 * a well-formed DM slug, which denies access rather than granting it.
+	 */
+	private array function dmParticipants( required string slug ) {
+		if ( !isDMSlug( slug ) ) {
+			return [];
+		}
+		var halves = listToArray( slug.right( slug.len() - variables.DM_PREFIX.len() ), variables.DM_SEPARATOR, false, true );
+		if ( halves.len() != 2 ) {
+			return [];
+		}
+		try {
+			return halves.map( ( half ) => charsetEncode( binaryDecode( half, "hex" ), "utf-8" ) );
+		} catch ( any e ) {
+			return [];
+		}
+	}
+
+	private boolean function isDMParticipant( required string login, required string destination ) {
+		return arrayFindNoCase( dmParticipants( channelSlug( destination ) ), login.trim() ) > 0;
+	}
+
+	private boolean function isDMSlug( required string slug ) {
+		return isPrefixed( slug, variables.DM_PREFIX );
+	}
+
+	/**
+	 * True for the chat, typing and presence streams of a DM alike, since all three
+	 * carry the conversation's slug and all three need the same participant check.
+	 */
+	private boolean function isDMDestination( required string destination ) {
+		return isDMSlug( channelSlug( destination ) );
 	}
 
 	/* ------------------------------------------------------- helpers */
@@ -277,6 +383,9 @@ class extends="modules.socketbox.models.WebSocketSTOMP" {
 			return;
 		}
 		for ( var destination in snapshot.destinations ) {
+			if ( isDMDestination( destination ) ) {
+				continue;
+			}
 			announceSystemMessage( destination, "#snapshot.login# left the channel" );
 			broadcastChannelPresence( channelSlug( destination ) );
 		}

@@ -157,6 +157,12 @@ body {
 	overflow: hidden;
 }
 
+/* A DM has no member panel, so the third column goes away. Equal specificity to
+   the .shell rules in the responsive block below, which therefore still win. */
+.shell--dm {
+	grid-template-columns: 240px minmax(0, 1fr);
+}
+
 /* ------------------------------------------------------------ sidebar */
 
 .sidebar {
@@ -263,6 +269,25 @@ body {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+
+.channel__dot {
+	flex: none;
+	width: 7px;
+	height: 7px;
+	background: var(--sidebar-fg-dim);
+	border-radius: 50%;
+}
+
+.channel__dot.is-online {
+	background: var(--online);
+}
+
+.sidebar__hint {
+	margin: 0 0 0 8px;
+	font-size: 12px;
+	line-height: 1.4;
+	color: var(--sidebar-fg-dim);
 }
 
 .channel__badge {
@@ -410,6 +435,25 @@ body {
 .main__title {
 	margin: 0;
 	font-size: 17px;
+}
+
+.main__dm-status {
+	flex: none;
+	padding: 2px 8px;
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: var(--text-dim);
+	background: var(--surface-alt);
+	border: 1px solid var(--border);
+	border-radius: 10px;
+}
+
+.main__dm-status.is-online {
+	color: light-dark(#1c6b45, #7ee0af);
+	background: light-dark(#e8f8ef, #17352a);
+	border-color: light-dark(#b6e3cb, #275f45);
 }
 
 .main__reconnecting {
@@ -717,6 +761,27 @@ body {
 
 .presence__name.is-me {
 	font-weight: 700;
+}
+
+.presence__name--action {
+	padding: 0;
+	font: inherit;
+	font-size: 14px;
+	text-align: left;
+	color: var(--text);
+	background: none;
+	border: 0;
+	cursor: pointer;
+}
+
+.presence__name--action:hover {
+	color: var(--accent-line);
+	text-decoration: underline;
+}
+
+.presence__name--action:focus-visible {
+	outline: 2px solid var(--accent-line);
+	outline-offset: 2px;
 }
 
 /* ------------------------------------------------------ responsive / touch */

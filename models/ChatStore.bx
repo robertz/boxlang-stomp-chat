@@ -6,6 +6,9 @@ class {
 
 	variables.HISTORY_LIMIT = 100;
 	variables.RESERVED_SLUGS = "channels,presence,typing,chat,system";
+	// Direct message conversations live in the same history map, keyed by a slug of
+	// this shape. Public channels must not be creatable inside that namespace.
+	variables.DIRECT_PREFIX = "dm-";
 
 	function init() {
 		variables.channels = [
@@ -28,6 +31,10 @@ class {
 
 	boolean function channelExists( required string slug ) {
 		return variables.channels.some( ( c ) => c.slug == slug );
+	}
+
+	boolean function isDirectSlug( required string slug ) {
+		return left( slug, variables.DIRECT_PREFIX.len() ) == variables.DIRECT_PREFIX;
 	}
 
 	/**
@@ -53,7 +60,7 @@ class {
 		if ( slug.len() > 40 ) {
 			throw( type = "ChatStore.InvalidChannel", message = "Channel name is too long (40 characters max)." );
 		}
-		if ( listFindNoCase( variables.RESERVED_SLUGS, slug ) ) {
+		if ( listFindNoCase( variables.RESERVED_SLUGS, slug ) || isDirectSlug( slug ) ) {
 			throw( type = "ChatStore.InvalidChannel", message = "'#slug#' is a reserved name." );
 		}
 

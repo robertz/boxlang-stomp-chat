@@ -15,8 +15,16 @@
 			payload = { "channels" : chatStore.getChannels() };
 			break;
 		case "history":
-			slug    = chatStore.slugify( url.channel ?: "" );
-			payload = { "channel" : slug, "messages" : chatStore.getHistory( slug ) };
+			slug = chatStore.slugify( url.channel ?: "" );
+			// There is no identity on an HTTP request here, and a DM slug is
+			// computable from two public usernames, so serving one would hand any
+			// caller someone else's conversation. Those come over STOMP instead,
+			// where authorize() has already vetted the subscriber.
+			if ( chatStore.isDirectSlug( slug ) ) {
+				payload = { "error" : "Direct message history is not available over HTTP." };
+			} else {
+				payload = { "channel" : slug, "messages" : chatStore.getHistory( slug ) };
+			}
 			break;
 		default:
 			payload = { "error" : "Unknown action '#action#'" };

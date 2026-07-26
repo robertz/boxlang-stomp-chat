@@ -5,6 +5,9 @@ const STORAGE_USERNAME = 'stomp-chat.username';
 
 export const DEFAULT_SLUG = 'general';
 
+const DM_PREFIX = 'dm-';
+const DM_SEPARATOR = '--';
+
 const TYPING_TTL_MS = 3000;
 const TYPING_THROTTLE_MS = 2000;
 // How many failed socket opens before we stop saying "reconnecting" and admit
@@ -44,10 +47,63 @@ function readJoined( username ) {
 	try {
 		const stored = JSON.parse( localStorage.getItem( joinedKey( username ) ) || '[]' );
 		const slugs = Array.isArray( stored ) ? stored.filter( ( s ) => typeof s === 'string' ) : [];
-		return [ DEFAULT_SLUG, ...slugs.filter( ( s ) => s !== DEFAULT_SLUG ) ];
+		return [ DEFAULT_SLUG, ...slugs.filter( ( s ) => s !== DEFAULT_SLUG && !isDMSlug( s ) ) ];
 	} catch ( e ) {
 		return [ DEFAULT_SLUG ];
 	}
+}
+
+function dmKey( username ) {
+	return 'stomp-chat.dms.' + ( username || '' ).toLowerCase();
+}
+
+function readDMs( username ) {
+	try {
+		const stored = JSON.parse( localStorage.getItem( dmKey( username ) ) || '[]' );
+		return Array.isArray( stored ) ? stored.filter( isDMSlug ) : [];
+	} catch ( e ) {
+		return [];
+	}
+}
+
+/*
+ * A conversation's slug is the two lowercased usernames hex-encoded and sorted,
+ * so both ends compute the same one without asking the server. Hex because a
+ * username may contain spaces and dots: anything lossier could map two different
+ * people onto one conversation, which would leak messages between them. Must
+ * stay in step with the same helpers in WebSocket.bx.
+ */
+function encodeName( name ) {
+	return Array.from( new TextEncoder().encode( ( name || '' ).trim().toLowerCase() ) )
+		.map( ( byte ) => byte.toString( 16 ).padStart( 2, '0' ) )
+		.join( '' );
+}
+
+function decodeName( hex ) {
+	const pairs = hex.match( /../g ) || [];
+	return new TextDecoder().decode( new Uint8Array( pairs.map( ( pair ) => parseInt( pair, 16 ) ) ) );
+}
+
+export function isDMSlug( slug ) {
+	return typeof slug === 'string' && slug.startsWith( DM_PREFIX );
+}
+
+export function dmSlugFor( other ) {
+	const pair = [ state.username, other ].map( ( name ) => ( name || '' ).trim().toLowerCase() ).sort();
+	return DM_PREFIX + pair.map( encodeName ).join( DM_SEPARATOR );
+}
+
+/**
+ * The other person in a conversation. Falls back to the first half so a slug
+ * stored under a name you've since changed still renders as something.
+ */
+export function dmPartner( slug ) {
+	if ( !isDMSlug( slug ) ) {
+		return '';
+	}
+	const halves = slug.slice( DM_PREFIX.length ).split( DM_SEPARATOR ).map( decodeName );
+	const me = ( state.username || '' ).trim().toLowerCase();
+	return halves.find( ( name ) => name !== me ) || halves[ 0 ] || '';
 }
 
 export const state = reactive( {
@@ -65,6 +121,8 @@ export const state = reactive( {
 	offlineReason: '',
 	channels: [],
 	joined: readJoined( readUsername() ),
+	// Open direct-message conversations, as dm- slugs
+	dms: readDMs( readUsername() ),
 	activeSlug: DEFAULT_SLUG,
 	messages: {},
 	unread: {},
@@ -122,6 +180,15 @@ export function channelName( slug ) {
 	return match ? match.name : slug;
 }
 
+/**
+ * How a conversation is named everywhere in the UI, sigil included, so the
+ * header, composer and presence panel can't disagree about it. A raw DM slug is
+ * hex and must never reach the screen.
+ */
+export function displayTitle( slug ) {
+	return isDMSlug( slug ) ? '@' + dmPartner( slug ) : '#' + channelName( slug );
+}
+
 export function messagesFor( slug ) {
 	return state.messages[ slug ] || [];
 }
@@ -146,6 +213,14 @@ export function isJoined( slug ) {
 
 function persistJoined() {
 	localStorage.setItem( joinedKey( state.username ), JSON.stringify( state.joined ) );
+}
+
+function persistDMs() {
+	try {
+		localStorage.setItem( dmKey( state.username ), JSON.stringify( state.dms ) );
+	} catch ( e ) {
+		/* private mode; the conversation list just won't survive a reload */
+	}
 }
 
 function parseBody( message ) {
@@ -233,18 +308,31 @@ export function connect( username ) {
 			// A reconnect replays this handler, so rebuild every subscription
 			channelSubs.clear();
 			state.joined = readJoined( name );
+			state.dms = readDMs( name );
 
 			client.subscribe( 'channels', ( m ) => {
 				state.channels = parseBody( m ).channels || [];
 			} );
-			if ( state.sessionId ) {
-				client.subscribe( 'private.' + state.sessionId, ( m ) => {
-					handlePrivateMessage( parseBody( m ) );
-				} );
-			}
-
 			loadChannels();
 			state.joined.forEach( ( slug ) => subscribeChannel( slug ) );
+
+			if ( state.sessionId ) {
+				// Frames from one socket are not necessarily handled in the order they
+				// were sent -- the broker dispatches them across worker threads. That
+				// matters here because subscribing to a DM makes the server push its
+				// backlog to this destination, and on a reconnect both frames go out in
+				// the same burst: the reply can be sent before the subscription
+				// registering it exists, and then it's simply lost. Waiting for the
+				// broker's RECEIPT removes the ordering assumption instead of hoping.
+				client.subscribe(
+					'private.' + state.sessionId,
+					( m ) => handlePrivateMessage( parseBody( m ) ),
+					{ receipt: 'private-ready' }
+				);
+				client.watchForReceipt( 'private-ready', () => {
+					state.dms.forEach( ( slug ) => subscribeChannel( slug ) );
+				} );
+			}
 		},
 		onStompError: ( frame ) => {
 			// SocketBox hardcodes the `message` header to "Invalid login" and puts
@@ -331,6 +419,20 @@ function handlePrivateMessage( payload ) {
 		state.actionError = '';
 		joinChannel( payload.channel.slug );
 		setActive( payload.channel.slug );
+	} else if ( payload.type === 'dmHistory' && isDMSlug( payload.slug ) ) {
+		mergeHistory( payload.slug, payload.messages || [] );
+	} else if ( payload.type === 'dmOpened' && isDMSlug( payload.slug ) ) {
+		// The server re-sends this on every message, so only a conversation we
+		// weren't already in counts as unread. Once subscribed, the message itself
+		// arrives through the chat handler and is counted there — this branch
+		// existing at all is what stops a DM to someone who hasn't opened it from
+		// vanishing.
+		if ( !state.dms.includes( payload.slug ) ) {
+			trackDM( payload.slug );
+			if ( payload.slug !== state.activeSlug && payload.from !== state.username ) {
+				state.unread[ payload.slug ] = unreadFor( payload.slug ) + 1;
+			}
+		}
 	}
 }
 
@@ -364,7 +466,11 @@ function subscribeChannel( slug ) {
 	} );
 
 	channelSubs.set( slug, { chat, typing, presence } );
-	loadHistory( slug );
+	// DM backlog arrives on the private destination in response to the subscribe
+	// above, because api.bxm can't safely hand it out.
+	if ( !isDMSlug( slug ) ) {
+		loadHistory( slug );
+	}
 }
 
 export function joinChannel( slug ) {
@@ -375,10 +481,7 @@ export function joinChannel( slug ) {
 	subscribeChannel( slug );
 }
 
-export function leaveChannel( slug ) {
-	if ( slug === DEFAULT_SLUG ) {
-		return;
-	}
+function teardownChannel( slug ) {
 	const subs = channelSubs.get( slug );
 	if ( subs ) {
 		subs.chat.unsubscribe();
@@ -386,8 +489,6 @@ export function leaveChannel( slug ) {
 		subs.presence.unsubscribe();
 		channelSubs.delete( slug );
 	}
-	state.joined = state.joined.filter( ( s ) => s !== slug );
-	persistJoined();
 	delete state.messages[ slug ];
 	delete state.unread[ slug ];
 	delete state.typing[ slug ];
@@ -395,6 +496,68 @@ export function leaveChannel( slug ) {
 	if ( state.activeSlug === slug ) {
 		setActive( DEFAULT_SLUG );
 	}
+}
+
+export function leaveChannel( slug ) {
+	if ( slug === DEFAULT_SLUG ) {
+		return;
+	}
+	state.joined = state.joined.filter( ( s ) => s !== slug );
+	persistJoined();
+	teardownChannel( slug );
+}
+
+/* ------------------------------------------------------------------ direct messages */
+
+function trackDM( slug ) {
+	if ( !state.dms.includes( slug ) ) {
+		state.dms.push( slug );
+		persistDMs();
+	}
+	subscribeChannel( slug );
+}
+
+/**
+ * Start or reopen a conversation with someone. Idempotent, so clicking a name
+ * that's already in the sidebar just switches to it.
+ */
+export function openDM( username ) {
+	const other = ( username || '' ).trim();
+	if ( !other || other.toLowerCase() === ( state.username || '' ).trim().toLowerCase() ) {
+		return;
+	}
+	const slug = dmSlugFor( other );
+	trackDM( slug );
+	setActive( slug );
+}
+
+/**
+ * Closing a conversation is local only — it drops off your sidebar but the
+ * history survives on the server, so the next message reopens it where you left
+ * off rather than starting fresh.
+ */
+export function closeDM( slug ) {
+	state.dms = state.dms.filter( ( s ) => s !== slug );
+	persistDMs();
+	teardownChannel( slug );
+}
+
+/**
+ * Conversations in the sidebar, ordered by the name shown rather than by the hex
+ * slug, which would sort meaninglessly.
+ */
+export function dmConversations() {
+	return state.dms
+		.map( ( slug ) => ( { slug, partner: dmPartner( slug ) } ) )
+		.sort( ( a, b ) => a.partner.localeCompare( b.partner ) );
+}
+
+/**
+ * Everyone subscribed to General, which nobody can leave — the closest thing to
+ * a global online list in an app with no user table.
+ */
+export function isOnline( username ) {
+	return usersFor( DEFAULT_SLUG ).some( ( user ) => user.toLowerCase() === ( username || '' ).toLowerCase() );
 }
 
 export function createChannel( name ) {
@@ -421,7 +584,7 @@ export function closePanels() {
 }
 
 export function totalUnread() {
-	return state.joined.reduce( ( sum, slug ) => sum + unreadFor( slug ), 0 );
+	return state.joined.concat( state.dms ).reduce( ( sum, slug ) => sum + unreadFor( slug ), 0 );
 }
 
 /* ------------------------------------------------------------------ sending */
@@ -460,4 +623,10 @@ export function changeUsername() {
 	state.unread = {};
 	state.typing = {};
 	state.usersByChannel = {};
+	// Conversations belong to the old identity, and their slugs wouldn't even
+	// decode against the new one
+	state.dms = [];
+	if ( isDMSlug( state.activeSlug ) ) {
+		state.activeSlug = DEFAULT_SLUG;
+	}
 }

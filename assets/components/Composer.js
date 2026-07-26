@@ -1,12 +1,12 @@
 import { ref, computed } from 'vue';
-import { state, channelName, sendMessage, notifyTyping, typingNamesFor } from '../useChat.js';
+import { state, displayTitle, sendMessage, notifyTyping, typingNamesFor } from '../useChat.js';
 
 export default {
 	name: 'Composer',
 	setup() {
 		const draft = ref( '' );
 
-		const placeholder = computed( () => 'Message #' + channelName( state.activeSlug ) );
+		const placeholder = computed( () => 'Message ' + displayTitle( state.activeSlug ) );
 
 		const typingLabel = computed( () => {
 			const names = typingNamesFor( state.activeSlug );

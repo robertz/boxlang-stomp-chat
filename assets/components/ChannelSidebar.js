@@ -10,7 +10,10 @@ import {
 	createChannel,
 	setActive,
 	changeUsername,
-	closePanels
+	closePanels,
+	dmConversations,
+	closeDM,
+	isOnline
 } from '../useChat.js';
 import { cycleTheme, themeLabel } from '../useTheme.js';
 
@@ -26,6 +29,7 @@ export default {
 		const unjoinedChannels = computed( () =>
 			state.channels.filter( ( c ) => !isJoined( c.slug ) )
 		);
+		const conversations = computed( () => dmConversations() );
 
 		const submit = () => {
 			if ( !draft.value.trim() ) {
@@ -42,6 +46,9 @@ export default {
 			showBrowse,
 			joinedChannels,
 			unjoinedChannels,
+			conversations,
+			closeDM,
+			isOnline,
 			unreadFor,
 			joinChannel,
 			leaveChannel,
@@ -94,6 +101,33 @@ export default {
 				</form>
 				<p v-if="state.actionError" class="create__error" @click="state.actionError = ''">
 					{{ state.actionError }}
+				</p>
+			</section>
+
+			<section class="sidebar__section">
+				<h2 class="sidebar__heading">Direct messages</h2>
+				<ul class="channel-list">
+					<li v-for="dm in conversations" :key="dm.slug">
+						<button
+							class="channel"
+							:class="{ 'is-active': dm.slug === state.activeSlug }"
+							@click="setActive( dm.slug )"
+						>
+							<span class="channel__dot" :class="{ 'is-online': isOnline( dm.partner ) }"></span>
+							<span class="channel__name">{{ dm.partner }}</span>
+							<span v-if="unreadFor( dm.slug )" class="channel__badge">
+								{{ unreadFor( dm.slug ) }}
+							</span>
+							<span
+								class="channel__leave"
+								title="Close conversation"
+								@click.stop="closeDM( dm.slug )"
+							>&times;</span>
+						</button>
+					</li>
+				</ul>
+				<p v-if="!conversations.length" class="sidebar__hint">
+					Pick someone from the member list to start one.
 				</p>
 			</section>
 
