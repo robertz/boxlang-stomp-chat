@@ -3,3 +3,4 @@ modules/
 logs/
 WEB-INF/
 .DS_Store
+blog-post.md
